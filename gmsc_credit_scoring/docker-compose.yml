@@ -1,0 +1,66 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       ${DB_NAME}
+      POSTGRES_USER:     ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  fastapi:
+    build: ./fastapi
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      data-loader:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  streamlit:
+    build: ./streamlit
+    ports:
+      - "8501:8501"
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    environment:
+      API_URL: http://fastapi:8000/predict
+
+  data-loader:
+      build: ./fastapi
+      env_file:
+        - .env
+      environment:
+        DB_HOST: postgres
+      volumes:
+        - ./data:/app/data:ro
+        - ./db:/app/db:ro
+      depends_on:
+        postgres:
+          condition: service_healthy
+      command: ["python", "db/load_data.py"]
+
+volumes:
+  postgres_data:
